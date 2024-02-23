@@ -1,0 +1,52 @@
+---
+- name: Aggiorna e riavvia le VM Debian solo se necessario
+  hosts: debian_vms
+  become: yes
+  become_user: root
+  tasks:
+    - name: Verifica che il sistema sia Debian/Ubuntu
+      ansible.builtin.assert:
+        that: ansible_os_family == "Debian"
+        fail_msg: "Questo playbook può essere eseguito solo su Debian o derivati Ubuntu."
+
+    - name: Verifica la presenza di aggiornamenti
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      register: update_result
+
+    - name: Controlla se sono disponibili aggiornamenti
+      ansible.builtin.shell: apt list --upgradable | grep -v 'Listing...' | wc -l
+      register: upgradable
+      changed_when: false
+      # Rimuoviamo la condizione per assicurarci che questo task venga sempre eseguito
+      # when: update_result.changed
+
+    - name: Esegue l'aggiornamento dei pacchetti solo se necessario
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+      when: upgradable.stdout | int > 0
+
+    - name: Verifica se è necessario un riavvio
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Riavvia la macchina solo se necessario
+      ansible.builtin.reboot:
+        msg: "Riavvio dopo aggiornamento"
+        connect_timeout: 5
+        reboot_timeout: 300
+        pre_reboot_delay: 0
+        post_reboot_delay: 60
+        test_command: uptime
+      when: reboot_required.stat.exists
+
+    - name: Attende che la VM sia nuovamente online solo se riavviata
+      ansible.builtin.wait_for_connection:
+        delay: 60
+        timeout: 300
+      when: reboot_required.stat.exists
+
